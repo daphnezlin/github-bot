@@ -135,10 +135,3 @@ The agent runs up to 10 iterations. Each iteration:
 4. Each step broadcasts a WebSocket event to the dashboard in real time
 
 This is a ReAct (Reason + Act) pattern: the model reasons about what information it needs, acts by calling tools, observes the results, and repeats until it has enough context to write the review.
-
-## Resume bullets
-
-- Built an autonomous GitHub PR review agent using the Gemini API with multi-tool orchestration — agent dynamically decides which tools to call (diff fetcher, linter, test coverage checker, issue search) to produce a structured code review
-- Implemented a ReAct-style agentic loop in Python with typed function-calling schemas, retry logic, and a 10-iteration budget to handle arbitrarily large PRs without runaway loops
-- Deployed via Docker + FastAPI webhook server that receives GitHub events and streams agent progress to a TypeScript/React dashboard over WebSockets
-- Wrote 14 unit and integration tests using mocked GitHub API fixtures; built an LLM-as-judge eval that scores review quality across 10 real PR fixtures on four dimensions (issues found, severity accuracy, actionability, overall agreement)
