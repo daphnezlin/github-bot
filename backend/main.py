@@ -36,19 +36,12 @@ async def github_webhook(request: Request):
     payload_bytes = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
 
-    print(f"DEBUG: signature received: {signature[:20]}...")
-
     if not verify_github_signature(payload_bytes, signature):
-        print("DEBUG: signature FAILED")
         raise HTTPException(status_code=401, detail="Invalid signature")
-
-    print("DEBUG: signature OK")
 
     event_type = request.headers.get("X-GitHub-Event", "")
     payload = json.loads(payload_bytes)
     action = payload.get("action", "")
-
-    print(f"DEBUG: event={event_type}, action={action}")
 
     if event_type != "pull_request":
         return {"status": "ignored"}

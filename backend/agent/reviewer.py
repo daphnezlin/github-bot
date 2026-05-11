@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from fastapi import WebSocket
 from github import Github
 import anthropic
+from db import save_review
 
 from tools.github_tools import TOOL_FUNCTIONS
 
@@ -208,6 +209,7 @@ async def run_review_agent(
             repo = gh.get_repo(repo_full_name)
             pr = repo.get_pull(pr_number)
             pr.create_issue_comment(final_review)
+            save_review(repo_full_name, pr_number, pr_title, final_review)
             await send_ws_update(websocket, {
                 "type": "complete",
                 "message": "Review posted!",
