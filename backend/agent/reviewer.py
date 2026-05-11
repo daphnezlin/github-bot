@@ -2,69 +2,66 @@ import os
 from dotenv import load_dotenv
 from fastapi import WebSocket
 from github import Github
-from google import genai
-from google.genai import types
+import anthropic
 
 from tools.github_tools import TOOL_FUNCTIONS
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 gh = Github(os.getenv("GITHUB_TOKEN"))
 
 TOOLS = [
-    types.Tool(function_declarations=[
-        types.FunctionDeclaration(
-            name="get_pr_diff",
-            description="Fetch the full diff of all files changed in this pull request. Call this first.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "repo_full_name": types.Schema(type="STRING"),
-                    "pr_number": types.Schema(type="INTEGER"),
-                },
-                required=["repo_full_name", "pr_number"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="run_linter",
-            description="Run static analysis on changed Python files to detect style issues and bugs.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "repo_full_name": types.Schema(type="STRING"),
-                    "pr_number": types.Schema(type="INTEGER"),
-                },
-                required=["repo_full_name", "pr_number"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="get_test_coverage",
-            description="Check whether changed source files have corresponding test files.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "repo_full_name": types.Schema(type="STRING"),
-                    "pr_number": types.Schema(type="INTEGER"),
-                },
-                required=["repo_full_name", "pr_number"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="search_related_issues",
-            description="Search open issues related to this PR based on the title and description.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "repo_full_name": types.Schema(type="STRING"),
-                    "pr_number": types.Schema(type="INTEGER"),
-                    "pr_title": types.Schema(type="STRING"),
-                    "pr_body": types.Schema(type="STRING"),
-                },
-                required=["repo_full_name", "pr_number", "pr_title", "pr_body"],
-            ),
-        ),
-    ])
+    {
+        "name": "get_pr_diff",
+        "description": "Fetch the full diff of all files changed in this pull request. Call this first.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo_full_name": {"type": "string"},
+                "pr_number": {"type": "integer"},
+            },
+            "required": ["repo_full_name", "pr_number"],
+        },
+    },
+    {
+        "name": "run_linter",
+        "description": "Run static analysis on changed Python files to detect style issues and bugs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo_full_name": {"type": "string"},
+                "pr_number": {"type": "integer"},
+            },
+            "required": ["repo_full_name", "pr_number"],
+        },
+    },
+    {
+        "name": "get_test_coverage",
+        "description": "Check whether changed source files have corresponding test files.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo_full_name": {"type": "string"},
+                "pr_number": {"type": "integer"},
+            },
+            "required": ["repo_full_name", "pr_number"],
+        },
+    },
+    {
+        "name": "search_related_issues",
+        "description": "Search open issues related to this PR based on the title and description.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo_full_name": {"type": "string"},
+                "pr_number": {"type": "integer"},
+                "pr_title": {"type": "string"},
+                "pr_body": {"type": "string"},
+            },
+            "required": ["repo_full_name", "pr_number", "pr_title", "pr_body"],
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """You are an expert code reviewer. Your job is to review GitHub pull requests thoroughly.
@@ -78,21 +75,21 @@ When given a PR you must:
 
 Your final review must be formatted as a GitHub comment in Markdown:
 
-## 🤖 AI Code Review
+## AI Code Review
 
 ### Summary
 (1-2 sentences on what this PR does)
 
-### ✅ What looks good
+### What looks good
 (bullet points)
 
-### ⚠️ Issues & suggestions
+### Issues and suggestions
 (bullet points with file references)
 
-### 🧪 Testing
+### Testing
 (comment on test coverage)
 
-### 🔗 Related issues
+### Related issues
 (any related open issues found)
 
 ---
@@ -122,16 +119,16 @@ async def run_review_agent(
     })
 
     messages = [
-        types.Content(
-            role="user",
-            parts=[types.Part(text=(
+        {
+            "role": "user",
+            "content": (
                 f"Please review this pull request.\n\n"
                 f"**Repository:** {repo_full_name}\n"
                 f"**PR #{pr_number}:** {pr_title}\n"
                 f"**Description:** {pr_body or 'No description provided.'}\n\n"
                 f"Use your tools to gather information, then write a thorough code review."
-            ))]
-        )
+            )
+        }
     ]
 
     final_review = None
@@ -142,70 +139,69 @@ async def run_review_agent(
             "message": f"Agent thinking... (step {iteration + 1})"
         })
 
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=messages,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                tools=TOOLS,
-            ),
+        response = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=4096,
+            system=SYSTEM_PROMPT,
+            tools=TOOLS,
+            messages=messages,
         )
 
-        messages.append(types.Content(
-            role="model",
-            parts=response.candidates[0].content.parts,
-        ))
-
-        # Check for tool calls
-        tool_calls = [
-            p.function_call
-            for p in response.candidates[0].content.parts
-            if p.function_call is not None
-        ]
-
-        if not tool_calls:
-            for part in response.candidates[0].content.parts:
-                if part.text:
-                    final_review = part.text
+        # check if we're done
+        if response.stop_reason == "end_turn":
+            for block in response.content:
+                if hasattr(block, "text"):
+                    final_review = block.text
                     break
             break
 
-        # Execute tools and collect results
-        tool_result_parts = []
-        for call in tool_calls:
-            tool_name = call.name
-            tool_args = dict(call.args)
+        # process tool calls
+        tool_results = []
+        has_tool_use = False
 
-            await send_ws_update(websocket, {
-                "type": "tool_call",
-                "tool": tool_name,
-                "input": tool_args,
-            })
+        for block in response.content:
+            if block.type == "tool_use":
+                has_tool_use = True
+                tool_name = block.name
+                tool_args = block.input
 
-            tool_fn = TOOL_FUNCTIONS.get(tool_name)
-            try:
-                result = tool_fn(**tool_args) if tool_fn else f"Unknown tool: {tool_name}"
-            except Exception as e:
-                result = f"Tool error: {e}"
+                await send_ws_update(websocket, {
+                    "type": "tool_call",
+                    "tool": tool_name,
+                    "input": tool_args,
+                })
 
-            await send_ws_update(websocket, {
-                "type": "tool_result",
-                "tool": tool_name,
-                "preview": str(result)[:200],
-            })
+                tool_fn = TOOL_FUNCTIONS.get(tool_name)
+                try:
+                    result = tool_fn(**tool_args) if tool_fn else f"Unknown tool: {tool_name}"
+                except Exception as e:
+                    result = f"Tool error: {e}"
 
-            tool_result_parts.append(
-                types.Part(
-                    function_response=types.FunctionResponse(
-                        name=tool_name,
-                        response={"result": str(result)},
-                    )
-                )
-            )
+                await send_ws_update(websocket, {
+                    "type": "tool_result",
+                    "tool": tool_name,
+                    "preview": str(result)[:200],
+                })
 
-        messages.append(types.Content(role="user", parts=tool_result_parts))
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": str(result),
+                })
 
-    # Post review to GitHub
+        # add assistant response and tool results to messages
+        messages.append({"role": "assistant", "content": response.content})
+
+        if tool_results:
+            messages.append({"role": "user", "content": tool_results})
+        elif not has_tool_use:
+            for block in response.content:
+                if hasattr(block, "text"):
+                    final_review = block.text
+                    break
+            break
+
+    # post review to GitHub
     if final_review:
         await send_ws_update(websocket, {"type": "status", "message": "Posting review to GitHub..."})
         try:
