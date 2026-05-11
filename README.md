@@ -1,36 +1,36 @@
-# GitHub Review Agent
+# PR Review Agent
 
-An autonomous GitHub PR reviewer powered by an LLM agent with multi-tool orchestration.
+An autonomous code reviewer that runs as a GitHub bot. When a pull request is opened, it fetches the diff, runs static analysis, checks test coverage, searches related issues, and posts a structured review as a comment — all without human involvement.
 
 ## What it does
 
-When a PR is opened, a webhook triggers an agentic loop that:
-
-1. Fetches the full diff via GitHub API
-2. Runs `ruff` static analysis on changed Python files
-3. Checks whether changed source files have corresponding tests
-4. Searches open issues for related context
-5. Synthesizes a structured review and posts it as a GitHub comment
-6. Streams live progress to a TypeScript dashboard over WebSocket
+- Receives GitHub webhook events and verifies HMAC-SHA256 signatures
+- Runs a ReAct-style agentic loop using the Anthropic Claude API with 4 tools
+- Streams live progress to a TypeScript dashboard over WebSocket
+- Saves every review to MongoDB for a persistent review history
+- Posts the final review directly to the PR as a GitHub comment
 
 ## Architecture
 
 ```
-GitHub webhook → FastAPI server → Agent loop (Gemini + 4 tools) → GitHub PR comment
-                                         ↓
-                              TypeScript dashboard (WebSocket)
+GitHub webhook → FastAPI server → Claude agent (ReAct loop + 4 tools) → GitHub PR comment
+                                          ↓
+                               TypeScript dashboard (WebSocket)
+                                          ↓
+                                      MongoDB
 ```
 
 ## Tech stack
 
 | Layer | Technology |
 |---|---|
-| Agent | Google Gemini API with function calling, ReAct-style loop |
-| Backend | Python 3.11, FastAPI, WebSockets, uvicorn |
-| Tools | GitHub API (PyGithub), ruff (subprocess), test coverage checker, issue search |
+| Agent | Anthropic Claude API, ReAct-style agentic loop |
+| Backend | Python, FastAPI, WebSockets, uvicorn |
+| Tools | GitHub API (PyGithub), ruff, test coverage checker, issue search |
+| Database | MongoDB Atlas (review history) |
 | Frontend | TypeScript, React, WebSocket client |
 | Testing | pytest, pytest-asyncio, mocked GitHub API fixtures |
-| Eval | LLM-as-judge scoring agent reviews against human reviews |
+| Eval | LLM-as-judge scoring across 10 PR fixtures |
 | Deploy | Docker, docker-compose |
 
 ## Project structure
@@ -39,45 +39,57 @@ GitHub webhook → FastAPI server → Agent loop (Gemini + 4 tools) → GitHub P
 github-bot/
 ├── backend/
 │   ├── agent/
-│   │   └── reviewer.py        # ReAct agent loop — core of the project
+│   │   └── reviewer.py        # ReAct agent loop
 │   ├── tools/
-│   │   └── github_tools.py    # 4 typed tool implementations
+│   │   └── github_tools.py    # 4 tool implementations
 │   ├── tests/
 │   │   ├── test_agent.py      # 14 unit + integration tests
 │   │   └── eval/
-│   │       └── llm_judge.py   # LLM-as-judge eval over 10 PR fixtures
-│   └── main.py                # FastAPI webhook server + WebSocket
-├── dashboard/                 # TypeScript/React frontend
+│   │       └── llm_judge.py   # LLM-as-judge eval
+│   ├── db.py                  # MongoDB connection and queries
+│   └── main.py                # FastAPI server, webhook, WebSocket
+├── dashboard/
 │   └── src/
-│       └── App.tsx            # Live agent stream + review output
+│       └── App.tsx            # Live stream + review history
 ├── Dockerfile
 └── docker-compose.yml
 ```
 
+## How the agent loop works
+
+The agent runs up to 10 iterations. On each step:
+
+1. Sends the conversation history to Claude
+2. If Claude returns tool calls — executes them, appends results, loops
+3. If Claude returns text with no tool calls — that is the final review
+4. Every step broadcasts a WebSocket event to the dashboard in real time
+
+This is a ReAct (Reason + Act) pattern: the model reasons about what information it needs, calls a tool, observes the result, and repeats until it has enough context to write the review.
+
 ## Running locally
 
 ```bash
-# 1. Clone and set up environment
+# Clone and set up
 git clone <your-repo>
 cd github-bot
 python -m venv venv
 source venv/bin/activate
 pip install -r backend/requirements.txt
 
-# 2. Set environment variables
+# Set environment variables
 cp backend/.env.example backend/.env
-# Fill in GEMINI_API_KEY, GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET
+# Fill in ANTHROPIC_API_KEY, GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET, MONGODB_URI
 
-# 3. Start the backend
+# Start the backend
 cd backend
 uvicorn main:app --reload
 
-# 4. Start the dashboard (separate terminal)
+# Start the dashboard (separate terminal)
 cd dashboard
 npm install
 npm start
 
-# 5. Or run everything via Docker
+# Or run everything via Docker
 docker compose up --build
 ```
 
@@ -86,11 +98,7 @@ docker compose up --build
 ```bash
 cd backend
 python -m pytest tests/test_agent.py -v
-```
-
-Expected output:
-```
-14 passed in 0.55s
+# 14 passed
 ```
 
 ## Running the eval
@@ -100,38 +108,22 @@ cd backend
 python -m tests.eval.llm_judge
 ```
 
-Scores agent-generated reviews against human reviews across 10 PR fixtures using an LLM-as-judge. Reports agreement rate and per-dimension scores (issues found, severity accuracy, actionability).
+Scores agent-generated reviews against human reviews across 10 PR fixtures on four dimensions: issues found, severity accuracy, actionability, and overall agreement.
 
 ## Exposing the webhook locally
 
 ```bash
-# Install ngrok
-brew install ngrok
-
-# Expose port 8000
 ngrok http 8000
-
-# Set the forwarding URL as your GitHub webhook:
-# https://<your-ngrok-id>.ngrok.io/webhook
+# Use the forwarding URL as your GitHub webhook payload URL
 # Content type: application/json
-# Events: Pull requests
+# Events: Pull requests only
 ```
 
 ## Environment variables
 
 | Variable | Description |
 |---|---|
-| `GEMINI_API_KEY` | Google Gemini API key |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
 | `GITHUB_TOKEN` | GitHub personal access token (repo scope) |
 | `GITHUB_WEBHOOK_SECRET` | Secret set when creating the GitHub webhook |
-
-## How the agent loop works
-
-The agent runs up to 10 iterations. Each iteration:
-
-1. Sends the conversation history to Gemini
-2. If the model returns tool calls → executes them, appends results, loops
-3. If the model returns text with no tool calls → that is the final review
-4. Each step broadcasts a WebSocket event to the dashboard in real time
-
-This is a ReAct (Reason + Act) pattern: the model reasons about what information it needs, acts by calling tools, observes the results, and repeats until it has enough context to write the review.
+| `MONGODB_URI` | MongoDB Atlas connection string |
