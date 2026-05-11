@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+import asyncio
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,21 +29,30 @@ def verify_github_signature(payload: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+import asyncio
+
 @app.post("/webhook")
 async def github_webhook(request: Request):
     payload_bytes = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
+
+    print(f"DEBUG: signature received: {signature[:20]}...")
+
     if not verify_github_signature(payload_bytes, signature):
+        print("DEBUG: signature FAILED")
         raise HTTPException(status_code=401, detail="Invalid signature")
+
+    print("DEBUG: signature OK")
 
     event_type = request.headers.get("X-GitHub-Event", "")
     payload = json.loads(payload_bytes)
+    action = payload.get("action", "")
+
+    print(f"DEBUG: event={event_type}, action={action}")
 
     if event_type != "pull_request":
         return {"status": "ignored"}
-
-    action = payload.get("action", "")
-    if action not in ("opened", "synchronize"):
+    if action not in ("opened", "synchronize", "reopened"):
         return {"status": "ignored"}
 
     pr = payload["pull_request"]
@@ -53,13 +63,14 @@ async def github_webhook(request: Request):
 
     ws = active_connections.get(pr_number)
 
-    await run_review_agent(
+    # run agent in background so webhook returns immediately
+    asyncio.create_task(run_review_agent(
         repo_full_name=repo_full_name,
         pr_number=pr_number,
         pr_title=pr_title,
         pr_body=pr_body,
         websocket=ws,
-    )
+    ))
 
     return {"status": "review started", "pr": pr_number}
 
