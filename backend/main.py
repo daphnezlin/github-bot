@@ -82,3 +82,8 @@ async def websocket_endpoint(websocket: WebSocket, pr_number: int):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+@app.get("/reviews")
+async def get_reviews():
+    from db import get_reviews
+    return get_reviews()
