@@ -1,19 +1,17 @@
 # PR Review Agent
-
-An autonomous code reviewer that runs as a GitHub bot. When a pull request is opened, it fetches the diff, runs static analysis, checks test coverage, searches related issues, and posts a structured review as a comment — all without human involvement.
+An autonomous code reviewer that runs as a GitHub bot. When a pull request is opened, it fetches the diff, runs static analysis, checks test coverage, searches related issues, and posts both inline comments on specific lines of code and a structured summary review — all without human involvement.
 
 ## What it does
-
 - Receives GitHub webhook events and verifies HMAC-SHA256 signatures
 - Runs a ReAct-style agentic loop using the Anthropic Claude API with 4 tools
+- Posts inline comments on specific lines of code via GitHub's review API
+- Posts a structured summary review as an overall PR comment
 - Streams live progress to a TypeScript dashboard over WebSocket
 - Saves every review to MongoDB for a persistent review history
-- Posts the final review directly to the PR as a GitHub comment
 
 ## Architecture
-
 ```
-GitHub webhook → FastAPI server → Claude agent (ReAct loop + 4 tools) → GitHub PR comment
+GitHub webhook → FastAPI server → Claude agent (ReAct loop + 4 tools) → GitHub PR review (inline + summary)
                                           ↓
                                TypeScript dashboard (WebSocket)
                                           ↓
@@ -21,7 +19,6 @@ GitHub webhook → FastAPI server → Claude agent (ReAct loop + 4 tools) → Gi
 ```
 
 ## Tech stack
-
 | Layer | Technology |
 |---|---|
 | Agent | Anthropic Claude API, ReAct-style agentic loop |
@@ -31,15 +28,14 @@ GitHub webhook → FastAPI server → Claude agent (ReAct loop + 4 tools) → Gi
 | Frontend | TypeScript, React, WebSocket client |
 | Testing | pytest, pytest-asyncio, mocked GitHub API fixtures |
 | Eval | LLM-as-judge scoring across 10 PR fixtures |
-| Deploy | Docker, docker-compose |
+| Deploy | AWS EC2, systemd, Docker |
 
 ## Project structure
-
 ```
 github-bot/
 ├── backend/
 │   ├── agent/
-│   │   └── reviewer.py        # ReAct agent loop
+│   │   └── reviewer.py        # ReAct agent loop + inline comment logic
 │   ├── tools/
 │   │   └── github_tools.py    # 4 tool implementations
 │   ├── tests/
@@ -56,18 +52,29 @@ github-bot/
 ```
 
 ## How the agent loop works
-
 The agent runs up to 10 iterations. On each step:
-
 1. Sends the conversation history to Claude
 2. If Claude returns tool calls — executes them, appends results, loops
-3. If Claude returns text with no tool calls — that is the final review
+3. If Claude returns JSON with no tool calls — parses it into inline comments and a summary review
 4. Every step broadcasts a WebSocket event to the dashboard in real time
 
 This is a ReAct (Reason + Act) pattern: the model reasons about what information it needs, calls a tool, observes the result, and repeats until it has enough context to write the review.
 
-## Running locally
+The final output is a GitHub review containing:
+- Inline comments attached to specific lines in the diff
+- A structured summary comment on the Conversation tab
 
+## Deployment
+The backend runs as a systemd service on AWS EC2, so it stays live 24/7 without any local process running.
+
+To add the bot to any GitHub repo:
+1. Go to Settings → Webhooks → Add webhook
+2. Set Payload URL to your EC2 endpoint: `http://<your-ec2-ip>:8000/webhook`
+3. Content type: `application/json`
+4. Secret: your `GITHUB_WEBHOOK_SECRET`
+5. Events: Pull requests only
+
+## Running locally
 ```bash
 # Clone and set up
 git clone <your-repo>
@@ -77,8 +84,7 @@ source venv/bin/activate
 pip install -r backend/requirements.txt
 
 # Set environment variables
-cp backend/.env.example backend/.env
-# Fill in ANTHROPIC_API_KEY, GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET, MONGODB_URI
+# Create backend/.env with ANTHROPIC_API_KEY, GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET, MONGODB_URI
 
 # Start the backend
 cd backend
@@ -94,7 +100,6 @@ docker compose up --build
 ```
 
 ## Running tests
-
 ```bash
 cd backend
 python -m pytest tests/test_agent.py -v
@@ -102,25 +107,16 @@ python -m pytest tests/test_agent.py -v
 ```
 
 ## Running the eval
-
 ```bash
 cd backend
-python -m tests.eval.llm_judge
+python -m backend.tests.eval.llm_judge
 ```
 
-Scores agent-generated reviews against human reviews across 10 PR fixtures on four dimensions: issues found, severity accuracy, actionability, and overall agreement.
+Scores agent-generated reviews against reference reviews across 10 PR fixtures on four dimensions: issues found, severity accuracy, actionability, and overall agreement.
 
-## Exposing the webhook locally
-
-```bash
-ngrok http 8000
-# Use the forwarding URL as your GitHub webhook payload URL
-# Content type: application/json
-# Events: Pull requests only
-```
+**Results:** 8.9/10 average score, 100% agreement rate (≥7/10) across 10 fixtures.
 
 ## Environment variables
-
 | Variable | Description |
 |---|---|
 | `ANTHROPIC_API_KEY` | Anthropic API key |
