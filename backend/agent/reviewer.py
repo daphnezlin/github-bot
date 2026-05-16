@@ -94,7 +94,7 @@ For inline_comments:
 - Include 2-5 inline comments maximum on the most important issues
 - If there are no significant issues on specific lines, return an empty array for inline_comments
 
-Return ONLY the JSON object, no other text before or after it."""
+CRITICAL: Your entire response must be ONLY the JSON object. Start your response with { and end with }. No explanation, no preamble, no markdown fences, nothing else.""""""
 
 
 def parse_diff_positions(diff_text: str) -> dict[str, dict[int, int]]:
