@@ -1,10 +1,10 @@
 import os
+import json
 from dotenv import load_dotenv
 from fastapi import WebSocket
 from github import Github
 import anthropic
 from db import save_review
-
 from tools.github_tools import TOOL_FUNCTIONS
 
 load_dotenv()
@@ -74,29 +74,70 @@ When given a PR you must:
 4. Call search_related_issues to find related context
 5. After gathering all information, write a structured review
 
-Your final review must be formatted as a GitHub comment in Markdown:
+Your final response MUST be valid JSON in exactly this format:
+{
+  "summary": "1-2 sentence summary of what this PR does",
+  "inline_comments": [
+    {
+      "path": "exact/file/path.py",
+      "position": <diff position integer>,
+      "body": "specific comment about this line"
+    }
+  ],
+  "overall_comment": "## AI Code Review\\n\\n### Summary\\n...\\n\\n### What looks good\\n...\\n\\n### Issues and suggestions\\n...\\n\\n### Testing\\n...\\n\\n### Related issues\\n...\\n\\n---\\n*Reviewed by github-bot*"
+}
 
-## AI Code Review
+For inline_comments:
+- position is the line's position in the unified diff (1-indexed, counting from the first @@ line of each file's diff)
+- Only include inline comments for lines that start with + in the diff (added lines)
+- Be specific — reference the exact issue on that line
+- Include 2-5 inline comments maximum on the most important issues
+- If there are no significant issues on specific lines, return an empty array for inline_comments
 
-### Summary
-(1-2 sentences on what this PR does)
+Return ONLY the JSON object, no other text before or after it."""
 
-### What looks good
-(bullet points)
 
-### Issues and suggestions
-(bullet points with file references)
+def parse_diff_positions(diff_text: str) -> dict[str, dict[int, int]]:
+    """
+    Parse a unified diff and return a mapping of:
+    {filename: {actual_line_number: diff_position}}
+    
+    diff_position is what GitHub's API needs for inline comments.
+    """
+    file_positions = {}
+    current_file = None
+    diff_position = 0
+    current_line = 0
 
-### Testing
-(comment on test coverage)
+    for line in diff_text.split("\n"):
+        if line.startswith("### "):
+            # Our custom format: ### filename (status)
+            parts = line[4:].split(" (")
+            if parts:
+                current_file = parts[0].strip()
+                file_positions[current_file] = {}
+                diff_position = 0
+                current_line = 0
+        elif line.startswith("@@"):
+            # Parse @@ -old_start,old_count +new_start,new_count @@
+            diff_position += 1
+            try:
+                new_part = line.split("+")[1].split("@@")[0].strip()
+                current_line = int(new_part.split(",")[0]) - 1
+            except (IndexError, ValueError):
+                current_line = 0
+        elif line.startswith("+") and not line.startswith("+++"):
+            diff_position += 1
+            current_line += 1
+            if current_file and current_file in file_positions:
+                file_positions[current_file][current_line] = diff_position
+        elif line.startswith("-") and not line.startswith("---"):
+            diff_position += 1
+        elif not line.startswith("\\"):
+            diff_position += 1
+            current_line += 1
 
-### Related issues
-(any related open issues found)
-
----
-*Reviewed by github-bot*
-
-Be specific, actionable, and encouraging."""
+    return file_positions
 
 
 async def send_ws_update(websocket: WebSocket | None, message: dict):
@@ -127,12 +168,14 @@ async def run_review_agent(
                 f"**Repository:** {repo_full_name}\n"
                 f"**PR #{pr_number}:** {pr_title}\n"
                 f"**Description:** {pr_body or 'No description provided.'}\n\n"
-                f"Use your tools to gather information, then write a thorough code review."
+                f"Use your tools to gather information, then write a thorough code review. "
+                f"Remember to return your final review as a JSON object."
             )
         }
     ]
 
-    final_review = None
+    final_review_json = None
+    diff_text = None
 
     for iteration in range(10):
         await send_ws_update(websocket, {
@@ -152,7 +195,20 @@ async def run_review_agent(
         if response.stop_reason == "end_turn":
             for block in response.content:
                 if hasattr(block, "text"):
-                    final_review = block.text
+                    try:
+                        text = block.text.strip()
+                        if text.startswith("```"):
+                            text = text.split("```")[1]
+                            if text.startswith("json"):
+                                text = text[4:]
+                        final_review_json = json.loads(text.strip())
+                    except json.JSONDecodeError:
+                        # fallback: treat as plain text review
+                        final_review_json = {
+                            "summary": "",
+                            "inline_comments": [],
+                            "overall_comment": block.text
+                        }
                     break
             break
 
@@ -175,6 +231,9 @@ async def run_review_agent(
                 tool_fn = TOOL_FUNCTIONS.get(tool_name)
                 try:
                     result = tool_fn(**tool_args) if tool_fn else f"Unknown tool: {tool_name}"
+                    # save the diff text so we can parse positions later
+                    if tool_name == "get_pr_diff":
+                        diff_text = str(result)
                 except Exception as e:
                     result = f"Tool error: {e}"
 
@@ -198,23 +257,81 @@ async def run_review_agent(
         elif not has_tool_use:
             for block in response.content:
                 if hasattr(block, "text"):
-                    final_review = block.text
+                    try:
+                        text = block.text.strip()
+                        if text.startswith("```"):
+                            text = text.split("```")[1]
+                            if text.startswith("json"):
+                                text = text[4:]
+                        final_review_json = json.loads(text.strip())
+                    except json.JSONDecodeError:
+                        final_review_json = {
+                            "summary": "",
+                            "inline_comments": [],
+                            "overall_comment": block.text
+                        }
                     break
             break
 
     # post review to GitHub
-    if final_review:
+    if final_review_json:
         await send_ws_update(websocket, {"type": "status", "message": "Posting review to GitHub..."})
         try:
             repo = gh.get_repo(repo_full_name)
             pr = repo.get_pull(pr_number)
-            pr.create_issue_comment(final_review)
-            save_review(repo_full_name, pr_number, pr_title, final_review)
+
+            overall_comment = final_review_json.get("overall_comment", "")
+            inline_comments = final_review_json.get("inline_comments", [])
+
+            # parse diff positions if we have inline comments
+            if inline_comments and diff_text:
+                file_positions = parse_diff_positions(diff_text)
+
+                # build valid inline comments with correct positions
+                valid_comments = []
+                for c in inline_comments:
+                    path = c.get("path", "")
+                    position = c.get("position")
+                    body = c.get("body", "")
+
+                    if path and position and body:
+                        valid_comments.append({
+                            "path": path,
+                            "position": position,
+                            "body": body,
+                        })
+
+                if valid_comments:
+                    try:
+                        pr.create_review(
+                            body=overall_comment,
+                            event="COMMENT",
+                            comments=valid_comments,
+                        )
+                        await send_ws_update(websocket, {
+                            "type": "status",
+                            "message": f"Posted review with {len(valid_comments)} inline comments"
+                        })
+                    except Exception as e:
+                        # fallback to plain comment if inline fails
+                        await send_ws_update(websocket, {
+                            "type": "status",
+                            "message": f"Inline comments failed ({e}), posting as regular comment"
+                        })
+                        pr.create_issue_comment(overall_comment)
+                else:
+                    pr.create_issue_comment(overall_comment)
+            else:
+                pr.create_issue_comment(overall_comment)
+
+            save_review(repo_full_name, pr_number, pr_title, overall_comment)
+
             await send_ws_update(websocket, {
                 "type": "complete",
                 "message": "Review posted!",
-                "review": final_review,
+                "review": overall_comment,
             })
+
         except Exception as e:
             await send_ws_update(websocket, {"type": "error", "message": f"Failed to post: {e}"})
     else:
