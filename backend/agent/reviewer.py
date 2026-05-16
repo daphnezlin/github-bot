@@ -197,11 +197,13 @@ async def run_review_agent(
                 if hasattr(block, "text"):
                     try:
                         text = block.text.strip()
-                        if text.startswith("```"):
-                            text = text.split("```")[1]
-                            if text.startswith("json"):
-                                text = text[4:]
-                        final_review_json = json.loads(text.strip())
+                        text = block.text.strip()
+                        # extract JSON even if there's text before it
+                        start = text.find("{")
+                        end = text.rfind("}") + 1
+                        if start != -1 and end > start:
+                            text = text[start:end]
+                        final_review_json = json.loads(text)
                     except json.JSONDecodeError:
                         # fallback: treat as plain text review
                         final_review_json = {
@@ -259,11 +261,12 @@ async def run_review_agent(
                 if hasattr(block, "text"):
                     try:
                         text = block.text.strip()
-                        if text.startswith("```"):
-                            text = text.split("```")[1]
-                            if text.startswith("json"):
-                                text = text[4:]
-                        final_review_json = json.loads(text.strip())
+                        # extract JSON even if there's text before it
+                        start = text.find("{")
+                        end = text.rfind("}") + 1
+                        if start != -1 and end > start:
+                            text = text[start:end]
+                        final_review_json = json.loads(text)
                     except json.JSONDecodeError:
                         final_review_json = {
                             "summary": "",
