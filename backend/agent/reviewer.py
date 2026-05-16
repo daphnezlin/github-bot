@@ -94,7 +94,7 @@ For inline_comments:
 - Include 2-5 inline comments maximum on the most important issues
 - If there are no significant issues on specific lines, return an empty array for inline_comments
 
-CRITICAL: Your entire response must be ONLY the JSON object. Start your response with { and end with }. No explanation, no preamble, no markdown fences, nothing else.""""""
+Return ONLY the JSON object, no other text before or after it."""
 
 
 def parse_diff_positions(diff_text: str) -> dict[str, dict[int, int]]:
@@ -197,13 +197,11 @@ async def run_review_agent(
                 if hasattr(block, "text"):
                     try:
                         text = block.text.strip()
-                        text = block.text.strip()
-                        # extract JSON even if there's text before it
-                        start = text.find("{")
-                        end = text.rfind("}") + 1
-                        if start != -1 and end > start:
-                            text = text[start:end]
-                        final_review_json = json.loads(text)
+                        if text.startswith("```"):
+                            text = text.split("```")[1]
+                            if text.startswith("json"):
+                                text = text[4:]
+                        final_review_json = json.loads(text.strip())
                     except json.JSONDecodeError:
                         # fallback: treat as plain text review
                         final_review_json = {
@@ -261,12 +259,11 @@ async def run_review_agent(
                 if hasattr(block, "text"):
                     try:
                         text = block.text.strip()
-                        # extract JSON even if there's text before it
-                        start = text.find("{")
-                        end = text.rfind("}") + 1
-                        if start != -1 and end > start:
-                            text = text[start:end]
-                        final_review_json = json.loads(text)
+                        if text.startswith("```"):
+                            text = text.split("```")[1]
+                            if text.startswith("json"):
+                                text = text[4:]
+                        final_review_json = json.loads(text.strip())
                     except json.JSONDecodeError:
                         final_review_json = {
                             "summary": "",
