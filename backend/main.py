@@ -54,15 +54,12 @@ async def github_webhook(request: Request):
     pr_title = pr["title"]
     pr_body = pr.get("body", "") or ""
 
-    ws = active_connections.get(pr_number)
-
-    # run agent in background so webhook returns immediately
     asyncio.create_task(run_review_agent(
         repo_full_name=repo_full_name,
         pr_number=pr_number,
         pr_title=pr_title,
         pr_body=pr_body,
-        websocket=ws,
+        active_connections=active_connections,
     ))
 
     return {"status": "review started", "pr": pr_number}
