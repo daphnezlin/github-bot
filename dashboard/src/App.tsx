@@ -451,19 +451,25 @@ function App() {
 
   function connect() {
     if (!prNumber) return;
-    const ws = new WebSocket(`ws://15.223.46.157:8000/ws/${prNumber}`);
-    wsRef.current = ws;
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onmessage = (msg) => {
-      const event: EventType = JSON.parse(msg.data);
-      setEvents((prev) => [...prev, event]);
-      if (event.type === "tool_call") setActiveTools((prev) => new Set(prev).add(event.tool));
-      if (event.type === "tool_result") {
-        setActiveTools((prev) => { const next = new Set(prev); next.delete(event.tool); return next; });
-      }
-      if (event.type === "complete") setReview(event.review);
+    const attempt = () => {
+      const ws = new WebSocket(`ws://15.223.46.157:8000/ws/${prNumber}`);
+      wsRef.current = ws;
+      ws.onopen = () => setConnected(true);
+      ws.onclose = () => {
+        setConnected(false);
+        if (wsRef.current === ws) setTimeout(attempt, 1000);
+      };
+      ws.onmessage = (msg) => {
+        const event: EventType = JSON.parse(msg.data);
+        setEvents((prev) => [...prev, event]);
+        if (event.type === "tool_call") setActiveTools((prev) => new Set(prev).add(event.tool));
+        if (event.type === "tool_result") {
+          setActiveTools((prev) => { const next = new Set(prev); next.delete(event.tool); return next; });
+        }
+        if (event.type === "complete") setReview(event.review);
+      };
     };
+    attempt();
   }
 
   function disconnect() {
