@@ -112,16 +112,6 @@ python -m pytest tests/test_agent.py -v
 # 14 passed
 ```
 
-## Running the eval
-```bash
-cd backend
-python -m backend.tests.eval.llm_judge
-```
-
-Scores agent-generated reviews against reference reviews across 10 PR fixtures on four dimensions: issues found, severity accuracy, actionability, and overall agreement.
-
-**Results:** 8.9/10 average score, 100% agreement rate (≥7/10) across 10 fixtures.
-
 ## Environment variables
 | Variable | Description |
 |---|---|
