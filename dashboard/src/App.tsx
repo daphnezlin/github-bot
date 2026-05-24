@@ -594,7 +594,7 @@ function App() {
                         </div>
                       </div>
                       <span className="history-time">
-                        {new Date(item.timestamp).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        {new Date(item.timestamp + "Z").toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                       </span>
                     </div>
                     {openItem === i && (
