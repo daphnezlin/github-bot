@@ -9,7 +9,7 @@ from tools.github_tools import TOOL_FUNCTIONS
 
 load_dotenv()
 
-client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 gh = Github(os.getenv("GITHUB_TOKEN"))
 
 TOOLS = [
@@ -186,7 +186,7 @@ async def run_review_agent(
             "message": f"Agent thinking... (step {iteration + 1})"
         })
 
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=4096,
             system=SYSTEM_PROMPT,
