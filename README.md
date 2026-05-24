@@ -1,5 +1,11 @@
 # PR Review Agent
-An autonomous code reviewer that runs as a GitHub bot. When a pull request is opened, it fetches the diff, runs static analysis, checks test coverage, searches related issues, and posts both inline comments on specific lines of code and a structured summary review — all without human involvement.
+An autonomous code reviewer that runs as a GitHub bot. When a pull request is opened, it fetches the diff, runs static analysis, checks test coverage, searches related issues, and posts both inline comments on specific lines of code and a structured summary review, all without human involvement.
+
+## Live demo
+| | URL |
+|---|---|
+| Dashboard | http://github-bot-dashboard.s3-website.ca-central-1.amazonaws.com |
+| Backend API | http://15.223.46.157:8000 |
 
 ## What it does
 - Receives GitHub webhook events and verifies HMAC-SHA256 signatures
@@ -28,7 +34,7 @@ GitHub webhook → FastAPI server → Claude agent (ReAct loop + 4 tools) → Gi
 | Frontend | TypeScript, React, WebSocket client |
 | Testing | pytest, pytest-asyncio, mocked GitHub API fixtures |
 | Eval | LLM-as-judge scoring across 10 PR fixtures |
-| Deploy | AWS EC2, systemd, Docker |
+| Deploy | AWS EC2 (backend), AWS S3 (frontend), systemd, Docker |
 
 ## Project structure
 ```
@@ -54,8 +60,8 @@ github-bot/
 ## How the agent loop works
 The agent runs up to 10 iterations. On each step:
 1. Sends the conversation history to Claude
-2. If Claude returns tool calls — executes them, appends results, loops
-3. If Claude returns JSON with no tool calls — parses it into inline comments and a summary review
+2. If Claude returns tool calls- executes them, appends results, loops
+3. If Claude returns JSON with no tool calls- parses it into inline comments and a summary review
 4. Every step broadcasts a WebSocket event to the dashboard in real time
 
 This is a ReAct (Reason + Act) pattern: the model reasons about what information it needs, calls a tool, observes the result, and repeats until it has enough context to write the review.
@@ -65,11 +71,11 @@ The final output is a GitHub review containing:
 - A structured summary comment on the Conversation tab
 
 ## Deployment
-The backend runs as a systemd service on AWS EC2, so it stays live 24/7 without any local process running.
+The backend runs as a systemd service on AWS EC2, staying live 24/7 without any local process running. The frontend is hosted as a static site on AWS S3.
 
 To add the bot to any GitHub repo:
 1. Go to Settings → Webhooks → Add webhook
-2. Set Payload URL to your EC2 endpoint: `http://<your-ec2-ip>:8000/webhook`
+2. Set Payload URL to: `http://15.223.46.157:8000/webhook`
 3. Content type: `application/json`
 4. Secret: your `GITHUB_WEBHOOK_SECRET`
 5. Events: Pull requests only
@@ -77,7 +83,7 @@ To add the bot to any GitHub repo:
 ## Running locally
 ```bash
 # Clone and set up
-git clone <your-repo>
+git clone https://github.com/daphnezlin/github-bot
 cd github-bot
 python -m venv venv
 source venv/bin/activate
