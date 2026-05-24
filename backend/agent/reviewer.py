@@ -153,9 +153,12 @@ async def run_review_agent(
     pr_number: int,
     pr_title: str,
     pr_body: str,
-    websocket: WebSocket | None = None,
+    active_connections: dict | None = None,
 ):
-    await send_ws_update(websocket, {
+    def get_ws():
+        return (active_connections or {}).get(pr_number)
+    
+    await send_ws_update(get_ws(), {
         "type": "status",
         "message": f"Starting review for PR #{pr_number}: {pr_title}"
     })
@@ -178,7 +181,7 @@ async def run_review_agent(
     diff_text = None
 
     for iteration in range(10):
-        await send_ws_update(websocket, {
+        await send_ws_update(get_ws(), {
             "type": "thinking",
             "message": f"Agent thinking... (step {iteration + 1})"
         })
@@ -222,7 +225,7 @@ async def run_review_agent(
                 tool_name = block.name
                 tool_args = block.input
 
-                await send_ws_update(websocket, {
+                await send_ws_update(get_ws(), {
                     "type": "tool_call",
                     "tool": tool_name,
                     "input": tool_args,
@@ -237,7 +240,7 @@ async def run_review_agent(
                 except Exception as e:
                     result = f"Tool error: {e}"
 
-                await send_ws_update(websocket, {
+                await send_ws_update(get_ws(), {
                     "type": "tool_result",
                     "tool": tool_name,
                     "preview": str(result)[:200],
@@ -275,7 +278,7 @@ async def run_review_agent(
 
     # post review to GitHub
     if final_review_json:
-        await send_ws_update(websocket, {"type": "status", "message": "Posting review to GitHub..."})
+        await send_ws_update(get_ws(), {"type": "status", "message": "Posting review to GitHub..."})
         try:
             repo = gh.get_repo(repo_full_name)
             pr = repo.get_pull(pr_number)
@@ -308,13 +311,13 @@ async def run_review_agent(
                             event="COMMENT",
                             comments=valid_comments,
                         )
-                        await send_ws_update(websocket, {
+                        await send_ws_update(get_ws(), {
                             "type": "status",
                             "message": f"Posted review with {len(valid_comments)} inline comments"
                         })
                     except Exception as e:
                         # fallback to plain comment if inline fails
-                        await send_ws_update(websocket, {
+                        await send_ws_update(get_ws(), {
                             "type": "status",
                             "message": f"Inline comments failed ({e}), posting as regular comment"
                         })
@@ -326,13 +329,13 @@ async def run_review_agent(
 
             save_review(repo_full_name, pr_number, pr_title, overall_comment)
 
-            await send_ws_update(websocket, {
+            await send_ws_update(get_ws(), {
                 "type": "complete",
                 "message": "Review posted!",
                 "review": overall_comment,
             })
 
         except Exception as e:
-            await send_ws_update(websocket, {"type": "error", "message": f"Failed to post: {e}"})
+            await send_ws_update(get_ws(), {"type": "error", "message": f"Failed to post: {e}"})
     else:
-        await send_ws_update(websocket, {"type": "error", "message": "Agent did not produce a review."})
+        await send_ws_update(get_ws(), {"type": "error", "message": "Agent did not produce a review."})
