@@ -440,7 +440,7 @@ function App() {
   async function fetchHistory() {
     setLoadingHistory(true);
     try {
-      const res = await fetch("http://localhost:8000/reviews");
+      const res = await fetch("http://15.223.46.157:8000/reviews");
       const data = await res.json();
       setHistory(data);
     } catch {
@@ -451,7 +451,7 @@ function App() {
 
   function connect() {
     if (!prNumber) return;
-    const ws = new WebSocket(`ws://localhost:8000/ws/${prNumber}`);
+    const ws = new WebSocket(`ws://15.223.46.157:8000/ws/${prNumber}`);
     wsRef.current = ws;
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
